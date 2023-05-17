@@ -7,118 +7,288 @@ use App\Models\Bioschema\BioSchema;
 use App\Models\Dataset;
 use App\Models\NMRium;
 use App\Models\Project;
+use App\Models\Sample;
 use App\Models\Study;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Request;
 use Spatie\SchemaOrg\Schema;
 
+/**
+ * Implement Bioschemas profiles types on nmrXiv project, study, and dataset
+ * to enable exporting their metadata with a json endpoint, including the
+ * samples and molecules.
+ */
 class BiochemaController extends Controller
 {
-    /**
-     * Implement Bioschemas types on nmrXiv project, study, and dataset to enable exporting
-     * their metadata with a json endpoint, including the samples and molecules.
-     */
+     /**
+      * Implement Bioschemas upon request by model's name to generate a project, study, or dataset schema.
+      *
+      * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
+      * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
+      *
+      * @param  Illuminate\Http\Request  $request
+      * @param  App\Models\User  $username
+      * @param  App\Models\Project  $projectName
+      * @param  App\Models\Study  $studyName Optional
+      * @param  App\Models\Dataset  $datasetName Optional
+      * @return object
+      */
+     public function modelSchemaByName(Request $request, $username, $projectName, $studyName = null, $datasetName = null)
+     {
+        $user = User::where('username', $username)->firstOrFail();
+        if ($user) {
+            $project = Project::where([['slug', $projectName], ['owner_id', $user->id]])->firstOrFail();
+        }
+        if ($project) {
+            if ($project->is_public) {
+                $projectSchema = $this->project($project);
+                if ($studyName) {
+                    // send study back with project info added to it\
+                    $study = Study::where([['slug', $studyName], ['owner_id', $user->id], ['project_id', $project->id]])->firstOrFail();
+                    if ($study) {
+                        if ($study->is_public) {
+                            $studySchema = $this->study($study, $project);
+                            if ($datasetName) {
+                                $dataset = Dataset::where([['slug', $datasetName], ['owner_id', $user->id], ['project_id', $project->id], ['study_id', $study->id]])->firstOrFail();
+                                // send dataset with project and study details
+                                if ($dataset) {
+                                    $datasetSchema = $this->dataset($dataset, $study, $project);
 
-    /**
-     * Create a variable $confromsTo for Bioschemas' study creative work to be used
-     * for the project and study schemas.
-     *
-     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
-     *
-     * @return object $confromsTo
-     */
-    public function conforms()
-    {
-        $creativeWork = Schema::creativeWork();
-        $creativeWork['@id'] = 'https://bioschemas.org/profiles/Study/0.2-DRAFT';
-        $confromsTo = [];
-        $confromsTo['http://purl.org/dc/terms/conformsTo'] = $creativeWork;
+                                    return $datasetSchema;
+                                }
+                            }
 
-        return $confromsTo;
+                            return $studySchema;
+                        } else {
+                            throw new AuthorizationException;
+                        }
+                    }
+                }
+
+                return $projectSchema;
+            } else {
+                throw new AuthorizationException;
+            }
+        }
     }
 
     /**
-     * Implement Bioschemas' dataset with only few properties to be included in the project
-     * schema or the study schema.
+     * Implement Bioschemas upon request by model id to generate a project, study, or dataset schema.
      *
+     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
      * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
      *
-     * @param  App\Models\Dataset  $dataset
-     * @return object $datasetSchema
+     * @param  Illuminate\Http\Request  $request
+     * @param  string  $identifier
+     * @return object
      */
-    public function datasetLite($dataset)
+    public function modelSchemaByID(Request $request, $identifier)
     {
-        $datasetSchema = Schema::Dataset();
-        $datasetSchema->name($dataset->name);
-        $datasetSchema->url(env('APP_URL').'/'.explode(':', $dataset->identifier ? $dataset->identifier : ':')[1]);
+        $resolvedModel = resolveIdentifier($identifier);
+        $namespace = $resolvedModel['namespace'];
+        $model = $resolvedModel['model'];
 
-        return  $datasetSchema;
+        if ($model->is_public) {
+            if ($namespace == 'Project') {
+                $projectSchema = $this->project($model);
+
+                return $projectSchema;
+            } elseif ($namespace == 'Study') {
+                $studySchema = $this->study($model);
+
+                return $studySchema;
+            } elseif ($namespace == 'Dataset') {
+                $project = $model->project;
+                $study = $model->study;
+                $datasetSchema = $this->dataset($model, $study, $project);
+
+                return $datasetSchema;
+            }
+        } else {
+            throw new AuthorizationException;
+        }
+    }
+
+     /**
+      * Get Property value from ontologies.
+      *
+      * @param  string  $ontologyID
+      * @param  string  $value
+      * @param  string  $unitUrl
+      * @return object $propertyValue
+      */
+     public function getPropertyValue($name, $ontologyID, $value, $unitUrl)
+     {
+        $propertyValue = Schema::PropertyValue();
+        $propertyValue->name($name);
+        $propertyValue->propertyID($ontologyID);
+        $propertyValue->value($value);
+        $propertyValue->unitCode($unitUrl);
+
+        return $propertyValue;
     }
 
     /**
-     * Implement Bioschemas' study with only few properties, including the sample and molecules,
-     * to be included in the project
-     * schema.
+     * Create a list of all the schemas an object conforms to based on their urls.
      *
+     * @link https://www.dublincore.org/specifications/dublin-core/dcmi-terms/#conformsTo
+     *
+     * @param  array  $urls
+     * @return array $confromsToList
+     */
+    public function conformsTo($urls)
+    {
+        $confromsToList = [];
+        foreach ($urls as &$url) {
+            $creativeWork = Schema::creativeWork();
+            $creativeWork['@id'] = $url;
+            $confromsTo = $creativeWork;
+            array_push($confromsToList, $confromsTo);
+        }
+
+        return $confromsToList;
+    }
+
+    /**
+     * Get the tags (keywords) of a model.
+     *
+     * @param  object  $model
+     * @return object $tags
+     */
+    public function getTags($model)
+    {
+        $tags = [];
+        foreach ($model->tags as &$tag) {
+            $tag = $tag->name;
+            array_push($tags, $tag);
+        }
+
+        return $tags;
+    }
+
+    /**
+     * Implement Schemas' Person on a model's authors.
+     *
+     * @link https://schema.org/Person.
+     *
+     * @param  object  $model
+     * @return array $authors
+     */
+    public function getAuthors($model)
+    {
+        $authors = [];
+        foreach ($model->authors as &$author) {
+            $authorSchema = Schema::Person();
+            $authorSchema->givenName($author->given_name);
+            $authorSchema->familyName($author->family_name);
+            $authorSchema->identifier($author->orcid_id);
+            $authorSchema->email($author->email_id);
+            $authorSchema->affiliation($author->affiliation);
+            array_push($authors, $authorSchema);
+        }
+
+        return $authors;
+    }
+
+    /**
+     * Implement Schema' Article on a model's citations.
+     *
+     * @link https://schema.org/Article
+     *
+     * @param  object  $model
+     * @return array $citations
+     */
+    public function getCitations($model)
+    {
+        $citations = [];
+        foreach ($model->citations as &$citation) {
+            $citationSchema = Schema::Article();
+            $citationSchema->abstract($citation->abstract);
+            $citationSchema->author($citation->authors);
+            $citationSchema->headline($citation->title);
+            $citationSchema->identifier($citation->doi);
+            array_push($citations, $citationSchema);
+        }
+
+        return $citations;
+    }
+
+    /**
+     * Implement Bioschemas' MolecularEntity on molecules found in a sample.
+     *
+     * @link https://bioschemas.org/profiles/MolecularEntity/0.5-RELEASE
+     * @link https://bioschemas.org/types/BioChemEntity/0.7-RELEASE-2019_06_19
+     *
+     * @param  App\Models\BioSample  $sample
+     * @return array $molecules
+     */
+    public function getMolecules($sample)
+    {
+        $molecules = [];
+        foreach ($sample->molecules as &$molecule) {
+            $inchiKey = $molecule->INCHI_KEY;
+            $pubchemLink = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/'.$inchiKey.'/property/IUPACName/JSON';
+            $json = file_get_contents($pubchemLink);
+            $jsonDecode = json_decode($json, true);
+            $cid = $jsonDecode['PropertyTable']['Properties'][0]['CID'];
+            $iupacName = $jsonDecode['PropertyTable']['Properties'][0]['IUPACName'];
+
+            $moleculeSchema = Schema::MolecularEntity();
+            $moleculeSchema['@id'] = $inchiKey;
+            $moleculeSchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/profiles/MolecularEntity/0.5-RELEASE']);
+            $moleculeSchema['identifier'] = $inchiKey;
+            $moleculeSchema->name($molecule->CAS_NUMBER);
+            $moleculeSchema->url('https://pubchem.ncbi.nlm.nih.gov/compound/'.$cid);
+            $moleculeSchema->inChI($molecule->STANDARD_INCHI);
+            $moleculeSchema->inChIKey($inchiKey);
+            $moleculeSchema->iupacName($iupacName);
+            $moleculeSchema->molecularFormula($molecule->FORMULA);
+            $moleculeSchema->molecularWeight($molecule->MOLECULAR_WEIGHT);
+            $moleculeSchema->smiles([$molecule->SMILES, $molecule->SMILES_CHIRAL, $molecule->CANONICAL_SMILES]);
+            $moleculeSchema->hasRepresentation($molecule->MOL);
+            $moleculeSchema->description('Percentage composition: '.$molecule->pivot->percentage_composition.'%');
+            array_push($molecules, $moleculeSchema);
+        }
+
+        return $molecules;
+    }
+
+    /**
+     * Implement Bioschemas' BioChemEntity on samples found in studies.
+     *
+     * @link https://bioschemas.org/types/BioSample/0.1-RELEASE-2019_06_19
      * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
-     * @link https://bioschemas.org/profiles/Sample/0.2-RELEASE-2018_11_10
-     * @link https://bioschemas.org/types/MolecularEntity/0.3-RELEASE-2019_09_02
      *
      * @param  App\Models\Study  $study
-     * @return object $studySchema
+     * @return object $sampleSchema
      */
-    public function studyLite($study)
+    public function getSample($study)
     {
         $sample = $study->sample;
         $sampleSchema = BioSchema::BioSample();
-        $molecules = [];
-        foreach ($sample->molecules as &$molecule) {
-            $moleculeSchema = Schema::MolecularEntity();
-            $moleculeSchema->inChI($molecule->STANDARD_INCHI);
-            array_push($molecules, $moleculeSchema);
-        }
-        $sampleSchema->hasBioChemEntityPart($molecules);
+        $sampleSchema['@id'] = $study->doi;
+        $sampleSchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/types/BioSample/0.1-RELEASE-2019_06_19']);
+        $sampleSchema['identifie'] = explode(':', $study->identifier ? $study->identifier : ':')[1];
         $sampleSchema->name($sample->name);
+        $sampleSchema->description($sample->description);
+        $sampleSchema->url(env('APP_URL').'/'.explode(':', $study->identifier ? $study->identifier : ':')[1]);
+        $sampleSchema->hasBioChemEntityPart($this->getMolecules($sample));
 
-        $studySchema = BioSchema::Study();
-        $studySchema->name($study->name);
-        $studySchema->url(env('APP_URL').'/'.explode(':', $study->identifier ? $study->identifier : ':')[1]);
-        $studySchema->about($sampleSchema);
-
-        $datasets = [];
-        foreach ($study->datasets as &$dataset) {
-            $datasetSchema = $this->datasetLite($dataset);
-            array_push($datasets, $datasetSchema);
-        }
-
-        $studySchema->hasPart($datasets);
-
-        return $studySchema;
+        return $sampleSchema;
     }
 
     /**
-     * Implement Bioschemas' dataset, along with the project and study it belongs to.
+     * Get NMRium info from a dataset.
      *
      * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
      * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
      *
      * @param  App\Models\Dataset  $dataset
-     * @param  App\Models\Study  $study
-     * @param  App\Models\Project  $project
-     * @return object $datasetSchema
+     * @return array $nmriumInfo
      */
-    public function dataset($dataset, $study, $project)
+    public function getNMRiumInfo($dataset)
     {
-        $dataCatalog = Schema::dataCatalog();
-        $dataCatalog->name(env('APP_NAME'));
-        $dataCatalog->url('https://nmrxiv.org');
-
-        $creativeWorkDataset = Schema::creativeWork();
-        $creativeWorkDataset['@id'] = 'https://bioschemas.org/profiles/Dataset/1.0-RELEASE';
-
-        $DatasetconfromsTo = [];
-        $DatasetconfromsTo['http://purl.org/dc/terms/conformsTo'] = $creativeWorkDataset;
-
         $nmrium = NMRium::where([['dataset_id', $dataset->id]])->firstOrFail();
         $info = json_decode($nmrium->nmrium_info)->spectra[0]->info;
 
@@ -135,263 +305,259 @@ class BiochemaController extends Controller
         $spectralWidth = $info->spectralWidth;
         $numberOfPoints = $info->numberOfPoints;
         $relaxationTime = $info->relaxationTime;
-        $acquisitionTime = $info->acquisitionTime;
 
+        $nucleusProperty = $this->getPropertyValue('acquisition nucleus', 'NMR:1400083', $nucleus, null);
+        $solventProperty = $this->getPropertyValue('NMR solvent', 'NMR:1000330', $solvent, null);
+        $dimensionProperty = $this->getPropertyValue('NMR spectrum by dimensionality', 'NMR:1000117', $dimension, null);
+        $probeNameProperty = $this->getPropertyValue('NMR probe', 'OBI_0000516', $probeName, null);
+        $experimentProperty = $this->getPropertyValue('NMR by nucleus type', 'FIX_0000132', $experiment, null);
+        $temperatureProperty = $this->getPropertyValue('Temperature', 'NCIT_C25206', $temperature, 'https://ontobee.org/ontology/UO?iri=http://purl.obolibrary.org/obo/UO_0000012');
+        $baseFrequencyProperty = $this->getPropertyValue('irradiation frequency', 'NMR:1400026', $baseFrequency, 'http://purl.obolibrary.org/obo/UO_0000325');
+        $fieldStrengthProperty = $this->getPropertyValue('magnetic field strength', 'MR:1400253', $fieldStrength, 'http://purl.obolibrary.org/obo/UO_0000228');
+        $numberOfScansProperty = $this->getPropertyValue('number of scans', 'NMR:1400087', $numberOfScans, 'scans');
+        $pulseSequenceProperty = $this->getPropertyValue('nuclear magnetic resonance pulse sequence', 'CHMO:0001841', $pulseSequence, null);
+        $spectralWidthProperty = $this->getPropertyValue('Spectral Width', 'NCIT_C156496', $spectralWidth, null); //todo: add unit
+        $numberOfPointsProperty = $this->getPropertyValue('number of data points', 'NMR:1000176', $numberOfPoints, 'points');
+        $relaxationTimeProperty = $this->getPropertyValue('relaxation time measurement', 'FIX_0000202', $relaxationTime, 'http://purl.obolibrary.org/obo/UO_0000010');
+
+        $keywords = [$nucleus, $solvent, $dimension.'D', $experiment];
+        $variables = [$nucleusProperty, $solventProperty, $dimensionProperty, $probeNameProperty,
+            $experimentProperty, $temperatureProperty, $baseFrequencyProperty, $fieldStrengthProperty, $numberOfScansProperty, $pulseSequenceProperty, $spectralWidthProperty, $numberOfPointsProperty, $relaxationTimeProperty, ];
+
+        return [$keywords, $variables];
+    }
+
+    /**
+     * Get Dataset download details info from a dataset.
+     *
+     * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
+     * @link https://schema.org/distribution
+     * @link https://schema.org/DataDownload
+     *
+     * @param  App\Models\Dataset  $dataset
+     * return object $distribution
+     */
+    public function getDistribution($dataset)
+    {
+        $url = env('APP_URL');
+        $user = $dataset->user;
+        $slug = $dataset->project->slug;
+        $contentURL = $url.'/'.$user.'/datasets/'.$slug;
+
+        $distribution = Schema::distribution();
+        $distribution['@type'] = Schema::DataDownload();
+        $distribution->name($dataset->project->name);
+        $distribution->encodingFormat('zip');
+        $distribution->contentURL($contentURL);
+    }
+
+    /**
+     * Implement Bioschemas' DataCatalog with only few properties to be
+     * included in the dataset schema.
+     *
+     * @link https://bioschemas.org/profiles/DataCatalog/0.3-RELEASE-2019_07_01
+     *
+     * @return object $dataCatalogSchema
+     */
+    public function DataCatalogLite()
+    {
+        $dataCatalogSchema = Schema::dataCatalog();
+        $dataCatalogSchema->name(env('APP_NAME'));
+        $dataCatalogSchema->url(env('APP_URL'));
+
+        return $dataCatalogSchema;
+    }
+
+    /**
+     * Implement Bioschemas' MolecularEntity with only few properties to be
+     * included in the lite studies.
+     *
+     * @link https://bioschemas.org/profiles/MolecularEntity/0.5-RELEASE
+     * @link https://bioschemas.org/types/BioSample/0.1-RELEASE-2019_06_19
+     *
+     * @param  App\Models\BioSample  $sample
+     * @return object $molecules
+     */
+    public function moleculesLite($sample)
+    {
+        $molecules = [];
+        foreach ($sample->molecules as &$molecule) {
+            $moleculeSchema = Schema::MolecularEntity();
+            $moleculeSchema->inChI($molecule->STANDARD_INCHI);
+            $moleculeSchema->description('Percentage composition: '.$molecule->pivot->percentage_composition.'%');
+            array_push($molecules, $moleculeSchema);
+        }
+
+        return $molecules;
+    }
+
+    /**
+     * Implement Bioschemas' BioSample with only few properties to be
+     * included in the lite studies.
+     *
+     * @link https://bioschemas.org/types/BioChemEntity/0.7-RELEASE-2019_06_19
+     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
+     *
+     * @param  App\Models\Study  $study
+     * @return object $sampleSchema
+     */
+    public function sampleLite($study)
+    {
+        $sampleSchema = BioSchema::BioChemEntity();
+        $sample = $study->sample;
+        $molecules = $this->moleculesLite($sample);
+
+        $sampleSchema->name($sample->name);
+        $sampleSchema->hasBioChemEntityPart($molecules);
+
+        return $sampleSchema;
+    }
+
+    /**
+     * Implement Bioschemas' Dataset with only few properties to be included
+     * in the project schema or the study schema.
+     *
+     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
+     *
+     * @param  App\Models\Study  $study
+     * @return array $datasets
+     */
+    public function datasetsLite($study)
+    {
+        $datasets = [];
+        foreach ($study->datasets as &$dataset) {
+            $datasetSchema = Schema::Dataset();
+            $datasetSchema->name($dataset->name);
+            $datasetSchema->url(env('APP_URL').'/'.explode(':', $dataset->identifier ? $dataset->identifier : ':')[1]);
+            array_push($datasets, $datasetSchema);
+        }
+
+        return $datasets;
+    }
+
+    /**
+     * Implement Bioschemas' study with only few properties, including the sample and molecules,
+     * to be included in the project schema.
+     *
+     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
+     *
+     * @param  App\Models\Project  $project
+     * @return array $studies
+     */
+    public function studyLite($project)
+    {
+        $studies = [];
+        foreach ($project->studies as &$study) {
+            $studySchema = BioSchema::Study();
+            $studySchema->name($study->name);
+            $studySchema->url(env('APP_URL').'/'.explode(':', $study->identifier ? $study->identifier : ':')[1]);
+            $studySchema->about($this->sampleLite($study));
+            $studySchema->hasPart($this->datasetsLite($study));
+            array_push($studies, $studySchema);
+        }
+
+        return $studies;
+    }
+
+    /**
+     * Implement Bioschemas' Dataset, along with the project and study it belongs to.
+     *
+     * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
+     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
+     *
+     * @param  App\Models\Dataset  $dataset
+     * @param  App\Models\Study  $study
+     * @param  App\Models\Project  $project
+     * @return object $datasetSchema
+     */
+    public function dataset($dataset, $study, $project)
+    {
         $datasetSchema = Schema::Dataset();
-        $datasetSchema['@id'] = $dataset->uuid;
-        $datasetSchema['dct:conformsTo'] = $DatasetconfromsTo;
-        $datasetSchema->description('[nucleus:'.$nucleus.', solvent:'.$solvent.', dimension:'.$dimension.', probeName:'.$probeName.', experiment:'.$experiment.', temperature:'.$temperature.', baseFrequency:'.$baseFrequency.', fieldStrength:'.$fieldStrength.', numberOfScans:'.$numberOfScans.', pulseSequence:'.$pulseSequence.', spectralWidth:'.$spectralWidth.', numberOfPoints:'.$numberOfPoints.', relaxationTime:'.$relaxationTime.', acquisitionTime:'.$acquisitionTime);
-        $datasetSchema->keywords([$nucleus, $solvent, $dimension.'D', $experiment]);
-        $datasetSchema->license($study->license->url);
+        $datasetSchema['@id'] = $dataset->doi;
+        $datasetSchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/profiles/Dataset/1.0-RELEASE', 'https://isa-specs.readthedocs.io/en/latest/isamodel.html#assay']);
+        $datasetSchema['identifier'] = explode(':', $dataset->identifier ? $dataset->identifier : ':')[1];
         $datasetSchema->name($dataset->name);
+        $datasetSchema->description($dataset->description);
+        $datasetSchema->keywords($this->getNMRiumInfo($dataset)[0]);
+        $datasetSchema->license($study->license->url);
         $datasetSchema->url(env('APP_URL').'/'.explode(':', $dataset->identifier ? $dataset->identifier : ':')[1]);
-        $datasetSchema->datePublished($dataset->release_date);
-        $datasetSchema->includedInDataCatalog($dataCatalog);
-        $datasetSchema->measurementTechnique('https://terminology.nfdi4chem.de/ts/ontologies/chmo/terms?iri=http%3A%2F%2Fpurl.obolibrary.org%2Fobo%2FCHMO_0000591');
         $datasetSchema->dateCreated($dataset->created_at);
         $datasetSchema->dateModified($dataset->updated_at);
+        $datasetSchema->datePublished($dataset->release_date);
+        $datasetSchema->distribution($this->getDistribution($dataset));
+        $datasetSchema->includedInDataCatalog($this->DataCatalogLite());
+        $datasetSchema->measurementTechnique(env('MEASUREMENT_TECHNIQUE'));
+        $datasetSchema->variableMeasured($this->getNMRiumInfo($dataset)[1]);
         $datasetSchema->isAccessibleForFree(true);
         $projectSchema = $this->project($project);
-        $datasetSchema->isPartOf([$projectSchema]);
+        $studySchema = $this->study($study, $project);
+        $datasetSchema->isPartOf([$projectSchema, $studySchema]);
 
         return $datasetSchema;
     }
 
     /**
-     * Implement Bioschemas' study, including the sample and molecules, along
+     * Implement Bioschemas' Study, including the sample and molecules, along
      * with the project it belongs to and, briefly, the datasets it contains.
      *
      * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
-     * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
-     * @link https://bioschemas.org/profiles/Sample/0.2-RELEASE-2018_11_10
-     * @link https://bioschemas.org/types/MolecularEntity/0.3-RELEASE-2019_09_02
      *
      * @param  App\Models\Study  $study
      * @return object $studySchema
      */
-    public function study($study)
+    public function study($study, $project)
     {
-        $tags = [];
-        foreach ($study->tags as &$tag) {
-            $tag = $tag->name;
-            array_push($tags, $tag);
-        }
-
-        $datasets = [];
-        foreach ($study->datasets as &$dataset) {
-            $datasetSchema = $this->datasetLite($dataset);
-            array_push($datasets, $datasetSchema);
-        }
-
-        $creativeWorkSample = Schema::creativeWork();
-        $creativeWorkSample['@id'] = 'https://bioschemas.org/types/BioSample/0.1-RELEASE-2019_06_19';
-        $SampleconfromsTo = [];
-        $SampleconfromsTo['http://purl.org/dc/terms/conformsTo'] = $creativeWorkSample;
-
-        $sample = $study->sample;
-
-        $creativeWorkMolecule = Schema::creativeWork();
-        $creativeWorkMolecule['@id'] = 'https://bioschemas.org/profiles/MolecularEntity/0.5-RELEASE';
-        $MoleculeconfromsTo = [];
-        $MoleculeconfromsTo['http://purl.org/dc/terms/conformsTo'] = $creativeWorkMolecule;
-
-        $molecules = [];
-        foreach ($sample->molecules as &$molecule) {
-            $inchiKey = $molecule->INCHI_KEY;
-            $pubchemLink = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/'.$inchiKey.'/property/IUPACName/JSON';
-            $json = file_get_contents($pubchemLink);
-            $jsonDecode = json_decode($json, true);
-            $cid = $jsonDecode['PropertyTable']['Properties'][0]['CID'];
-            $iupacName = $jsonDecode['PropertyTable']['Properties'][0]['IUPACName'];
-
-            $moleculeSchema = Schema::MolecularEntity();
-            $moleculeSchema['@id'] = $inchiKey;
-            $moleculeSchema['dct:conformsTo'] = $MoleculeconfromsTo;
-            $moleculeSchema->name($molecule->CAS_NUMBER);
-            $moleculeSchema->url('https://pubchem.ncbi.nlm.nih.gov/compound/'.$cid);
-            $moleculeSchema->inChI($molecule->STANDARD_INCHI);
-            $moleculeSchema->iupacName($iupacName);
-            $moleculeSchema->molecularFormula($molecule->FORMULA);
-            $moleculeSchema->molecularWeight($molecule->MOLECULAR_WEIGHT);
-            $moleculeSchema->smiles([$molecule->SMILES, $molecule->SMILES_CHIRAL, $molecule->CANONICAL_SMILES]);
-            $moleculeSchema->hasRepresentation($molecule->MOL);
-            array_push($molecules, $moleculeSchema);
-        }
-        $sampleSchema = BioSchema::BioSample();
-        $sampleSchema['@id'] = $sample->uuid;
-        $sampleSchema['dct:conformsTo'] = $SampleconfromsTo;
-        $sampleSchema->name($sample->name);
-        $sampleSchema->description($sample->description);
-        $sampleSchema->url(env('APP_URL').'/'.explode(':', $study->identifier ? $study->identifier : ':')[1]);
-        $sampleSchema->hasBioChemEntityPart($molecules);
-
         $studySchema = BioSchema::Study();
-        $studySchema['@id'] = $study->uuid;
-        $studySchema['dct:conformsTo'] = $this->conforms();
-        $studySchema->datePublished($study->release_date);
-        $studySchema->description($study->description);
+        $studySchema['@id'] = $study->doi;
+        $studySchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/profiles/Study/0.2-DRAFT', 'https://isa-specs.readthedocs.io/en/latest/isamodel.html#study']);
+        $studySchema['identifier'] = explode(':', $study->identifier ? $study->identifier : ':')[1];
         $studySchema->name($study->name);
+        $studySchema->description($study->description);
+        $studySchema->keywords($this->getTags($study));
+        $studySchema->license($study->license->url);
+        $studySchema->url(env('APP_URL').'/'.explode(':', $study->identifier ? $study->identifier : ':')[1]);
+        $studySchema->dateCreated($study->created_at);
+        $studySchema->dateModified($study->updated_at);
+        $studySchema->datePublished($study->release_date);
+        $studySchema->about($this->getSample($study));
         $studySchema->studyDomain('Chemistry');
         $studySchema->studySubject('Small molecules');
-        $studySchema->about($sampleSchema);
-        $studySchema->dateCreated($study->created_at);
-        $studySchema->keywords($tags);
-        $studySchema->url(env('APP_URL').'/'.explode(':', $study->identifier ? $study->identifier : ':')[1]);
-        $studySchema->license($study->license->url);
-        $studySchema->hasPart($datasets);
+        $studySchema->isPartOf($this->project($project));
+        $studySchema->hasPart($this->datasetsLite($study));
 
         return $studySchema;
     }
 
-    /**
-     * Implement Bioschemas' project along with brief details about
-     * the studies and datasets it contains.
-     *
-     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
-     * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
-     * @link https://bioschemas.org/profiles/Sample/0.2-RELEASE-2018_11_10
-     * @link https://bioschemas.org/types/MolecularEntity/0.3-RELEASE-2019_09_02
-     *
-     * @param  App\Models\Project  $project
-     * @return object $projectSchema
-     */
-    public function project($project)
-    {
-        $authors = [];
-        foreach ($project->authors as &$author) {
-            $authorSchema = Schema::Person();
-            $authorSchema->givenName($author->given_name);
-            $authorSchema->familyName($author->family_name);
-            $authorSchema->identifier($author->orcid_id);
-            $authorSchema->email($author->email_id);
-            $authorSchema->affiliation($author->affiliation);
-            array_push($authors, $authorSchema);
-        }
-
-        $citations = [];
-        foreach ($project->citations as &$citation) {
-            $citationSchema = Schema::creativeWork();
-            $citationSchema->abstract($citation->abstract);
-            $citationSchema->author($citation->authors);
-            $citationSchema->headline($citation->title);
-            $citationSchema->identifier($citation->doi);
-            array_push($citations, $citationSchema);
-        }
-
-        $tags = [];
-        foreach ($project->tags as &$tag) {
-            $tag = $tag->name;
-            array_push($tags, $tag);
-        }
-        $studies = [];
-        foreach ($project->studies as &$study) {
-            $datasets = [];
-            foreach ($study->datasets as &$dataset) {
-                $datasetSchema = $this->datasetLite($dataset);
-                array_push($datasets, $datasetSchema);
-            }
-            $studySchema = $this->studyLite($study);
-            array_push($studies, $studySchema);
-        }
-
+     /**
+      * Implement Bioschemas' project along with brief details about
+      * the studies and datasets it contains.
+      *
+      * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
+      * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
+      * @link https://bioschemas.org/profiles/Sample/0.2-RELEASE-2018_11_10
+      * @link https://bioschemas.org/types/MolecularEntity/0.3-RELEASE-2019_09_02
+      *
+      * @param  App\Models\Project  $project
+      * @return object $projectSchema
+      */
+     public function project($project)
+     {
         $projectSchema = BioSchema::Study();
-        $projectSchema['@id'] = $project->uuid;
-        $projectSchema['dct:conformsTo'] = $this->conforms();
-        $projectSchema['author'] = $authors;
-        $projectSchema->datePublished($project->release_date);
-        $projectSchema->description($project->description);
+        $projectSchema['@id'] = $project->doi;
+        $projectSchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/profiles/Study/0.2-DRAFT', 'https://isa-specs.readthedocs.io/en/latest/isamodel.html#investigation']);
+        $projectSchema['identifier'] = explode(':', $project->identifier ? $project->identifier : ':')[1];
         $projectSchema->name($project->name);
-        $projectSchema->studyDomain('Chemistry');
-        $projectSchema->studySubject('Small molecules');
-        $projectSchema['citation'] = $citations;
-        $projectSchema->dateCreated($project->created_at);
-        $projectSchema->keywords($tags);
-        $projectSchema->url(env('APP_URL').'/'.explode(':', $project->identifier ? $project->identifier : ':')[1]);
+        $projectSchema->description($project->description);
+        $projectSchema->keywords($this->getTags($project));
         $projectSchema->license($project->license->url);
-        $projectSchema->hasPart($studies);
+        $projectSchema->url(env('APP_URL').'/'.explode(':', $project->identifier ? $project->identifier : ':')[1]);
+        $projectSchema->dateCreated($project->created_at);
+        $projectSchema->dateModified($project->updated_at);
+        $projectSchema->datePublished($project->release_date);
+        $projectSchema->author($this->getAuthors($project));
+        $projectSchema->citation($this->getCitations($project));
+        $projectSchema->hasPart($this->studyLite($project));
 
         return $projectSchema;
-    }
-
-/**
- * Implement Bioschemas upon request by model name to generate a project, study, or dataset schema.
- *
- * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
- * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
- * @link https://bioschemas.org/profiles/Sample/0.2-RELEASE-2018_11_10
- * @link https://bioschemas.org/types/MolecularEntity/0.3-RELEASE-2019_09_02
- *
- * @param  Illuminate\Http\Request  $request
- * @param  App\Models\User  $username
- * @param  App\Models\Project  $projectName
- * @param  App\Models\Study  $studyName Optional
- * @param  App\Models\Dataset  $datasetName Optional
- * @return object
- */
-public function modelSchemaByName(Request $request, $username, $projectName, $studyName = null, $datasetName = null)
-{
-    $user = User::where('username', $username)->firstOrFail();
-    if ($user) {
-        $project = Project::where([['slug', $projectName], ['owner_id', $user->id]])->firstOrFail();
-    }
-    if ($project) {
-        $projectSchema = $this->project($project);
-
-        if ($studyName) {
-            // send study back with project info added to it\
-            $study = Study::where([['slug', $studyName], ['owner_id', $user->id], ['project_id', $project->id]])->firstOrFail();
-            if ($study) {
-                $studySchema = $this->study($study);
-
-                $projectSchema->relatedStudy($studySchema);
-                if ($datasetName) {
-                    $dataset = Dataset::where([['slug', $datasetName], ['owner_id', $user->id], ['project_id', $project->id], ['study_id', $study->id]])->firstOrFail();
-                    // send dataset with project and study details
-                    if ($dataset) {
-                        $datasetSchema = $this->dataset($dataset, $study, $project);
-
-                        return $datasetSchema;
-                    }
-                }
-            }
-        }
-
-        return $projectSchema;
-    }
-}
-
-    /**
-     * Implement Bioschemas upon request by model id to generate a project, study, or dataset schema.
-     *
-     * @link https://bioschemas.org/profiles/Study/0.2-DRAFT
-     * @link https://bioschemas.org/profiles/Dataset/1.0-RELEASE
-     * @link https://bioschemas.org/profiles/Sample/0.2-RELEASE-2018_11_10
-     * @link https://bioschemas.org/types/MolecularEntity/0.3-RELEASE-2019_09_02
-     *
-     * @param  Illuminate\Http\Request  $request
-     * @param  string  $identifier
-     * @return object
-     */
-    public function modelSchemaByID(Request $request, $identifier)
-    {
-        $resolvedModel = resolveIdentifier($identifier);
-        $namespace = $resolvedModel['namespace'];
-        $model = $resolvedModel['model'];
-
-        if ($namespace == 'Project') {
-            $projectSchema = $this->project($model);
-
-            return $projectSchema;
-        } elseif ($namespace == 'Study') {
-            $studySchema = $this->study($model);
-
-            return $studySchema;
-        } elseif ($namespace == 'Dataset') {
-            $project = $model->project;
-            $study = $model->study;
-            $datasetSchema = $this->dataset($model, $study, $project);
-
-            return $datasetSchema;
-        }
     }
 }
