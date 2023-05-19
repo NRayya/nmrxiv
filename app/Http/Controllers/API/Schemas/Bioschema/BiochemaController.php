@@ -470,8 +470,11 @@ class BiochemaController extends Controller
      * @param  App\Models\Project  $project
      * @return object $datasetSchema
      */
-    public function dataset($dataset, $study, $project)
+    public function dataset($dataset)
     {
+        $study = $dataset->study;
+        $project = $dataset->project;
+       
         $datasetSchema = Schema::Dataset();
         $datasetSchema['@id'] = $dataset->doi;
         $datasetSchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/profiles/Dataset/1.0-RELEASE', 'https://isa-specs.readthedocs.io/en/latest/isamodel.html#assay']);
@@ -505,8 +508,9 @@ class BiochemaController extends Controller
      * @param  App\Models\Study  $study
      * @return object $studySchema
      */
-    public function study($study, $project)
+    public function study($study)
     {
+        $project = $study->project;
         $studySchema = BioSchema::Study();
         $studySchema['@id'] = $study->doi;
         $studySchema['dct:conformsTo'] = $this->conformsTo(['https://bioschemas.org/profiles/Study/0.3-DRAFT', 'https://isa-specs.readthedocs.io/en/latest/isamodel.html#study']);
