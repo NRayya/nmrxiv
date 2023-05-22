@@ -141,7 +141,7 @@ class BiochemaController extends Controller
     {
         $confromsToList = [];
         foreach ($urls as &$url) {
-            $creativeWork = Schema::creativeWork();
+            $creativeWork = Schema::CreativeWork();
             $creativeWork['@id'] = $url;
             $confromsTo = $creativeWork;
             array_push($confromsToList, $confromsTo);
@@ -344,11 +344,12 @@ class BiochemaController extends Controller
         $slug = $dataset->project->slug;
         $contentURL = $url.'/'.$user.'/datasets/'.$slug;
 
-        $distribution = Schema::distribution();
-        $distribution['@type'] = Schema::DataDownload();
+        $distribution = Schema::DataDownload();
         $distribution->name($dataset->project->name);
         $distribution->encodingFormat('zip');
         $distribution->contentURL($contentURL);
+
+        return $distribution;
     }
 
     /**
