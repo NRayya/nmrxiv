@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.1.0-rc.7](https://github.com/NFDI4Chem/nmrxiv/compare/v1.0.0-rc.7...v1.1.0-rc.7) (2023-08-09)
+
+
+### Features
+
+* auto import - nodejs spectra parser prototype implementation ([44026cf](https://github.com/NFDI4Chem/nmrxiv/commit/44026cf4c10c2177bfb8413807e16f40f13d7a75))
+* extended auto import and various front end bug fixes ([0ab3e57](https://github.com/NFDI4Chem/nmrxiv/commit/0ab3e571fcf6b809ca12b94e4a606b18dd9ae40f))
+* open project from dashboard in separate tabs feature refs - [#617](https://github.com/NFDI4Chem/nmrxiv/issues/617) ([5acf6a0](https://github.com/NFDI4Chem/nmrxiv/commit/5acf6a022f2834996d7cbb0b6712e1d2c823376c))
+
+
+### Bug Fixes
+
+* badge model null handling ([a9a76b8](https://github.com/NFDI4Chem/nmrxiv/commit/a9a76b883bcb734f1682038db835bae28b758498))
+* changes in nginx fast cgi config ([f0fdc0f](https://github.com/NFDI4Chem/nmrxiv/commit/f0fdc0f87ce417db9f8e5cfde9c319e513728138))
+* citation placeholder text ([208274d](https://github.com/NFDI4Chem/nmrxiv/commit/208274d05395ec09f6da4807af259e930e0b33e7))
+* citation_text 500 error. ([d4ad82e](https://github.com/NFDI4Chem/nmrxiv/commit/d4ad82e5c7ac5781c7c24707bb4c4c270ce50f2e))
+* default url fix ([5373edf](https://github.com/NFDI4Chem/nmrxiv/commit/5373edfbecf024ea5a88998f157fa5f0aa92ad81))
+* empty study states handling added ([e96bfee](https://github.com/NFDI4Chem/nmrxiv/commit/e96bfeef47df6ee88d22cc127f0072a458e42f98))
+* fastcgi time out and buffer config changes ([9d101e5](https://github.com/NFDI4Chem/nmrxiv/commit/9d101e5c8cf45d3c761ab914d554cf3019507e4b))
+* missing gate facade added ([d41b337](https://github.com/NFDI4Chem/nmrxiv/commit/d41b337152692974acebf9586e27815907e81bc6))
+* missing team error handling for retrieving owner details ([d5bb8a7](https://github.com/NFDI4Chem/nmrxiv/commit/d5bb8a77cf67bce5c265527fcb1dd2fff0afe7de))
+* nmrium info post error handling ([ef62b33](https://github.com/NFDI4Chem/nmrxiv/commit/ef62b33823b89bd8c3d2415af14b7a0360e7c434))
+* public meilisearch results issue fixed ([2656f99](https://github.com/NFDI4Chem/nmrxiv/commit/2656f99d0702099747e2defccac6a9ebca8c8ec1))
+* remove duplicate contributor_type. ([8894b63](https://github.com/NFDI4Chem/nmrxiv/commit/8894b63d676565f61a5dde0c4b91983e927443d9))
+* renamed datasets to spectra, files component bug fix, submission modal side bar click updates ([85ddc12](https://github.com/NFDI4Chem/nmrxiv/commit/85ddc123a29db6c9ebe16dd2c8a9cdc8b4b1f471))
+* team null error handling ([174914a](https://github.com/NFDI4Chem/nmrxiv/commit/174914a8d33bdabccd503e97c45fe8bb939f9fae))
+* tidy up console logs ([dbc3f9a](https://github.com/NFDI4Chem/nmrxiv/commit/dbc3f9a682ebcad36b6b084a2daf118c0b12bac0))
+* UI bug fixes, search extension, broken sort fix ([497853d](https://github.com/NFDI4Chem/nmrxiv/commit/497853d657798f926fb7fa2ca7f9ef20c8f1c833))
+* update READme ([1ba3618](https://github.com/NFDI4Chem/nmrxiv/commit/1ba3618fae33b1d717c88cc905989251569075be))
+* updated datasets to spectra in the terms and conditions text ([2b6618a](https://github.com/NFDI4Chem/nmrxiv/commit/2b6618a27d23012e4f3d244e67e7c4dd147af16f))
+
 ## [1.1.0-rc.6](https://github.com/NFDI4Chem/nmrxiv/compare/v1.0.0-rc.6...v1.1.0-rc.6) (2022-11-17)
 
 
